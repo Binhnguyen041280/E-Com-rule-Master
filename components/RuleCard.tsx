@@ -1,181 +1,228 @@
 
-import React, { useState } from 'react';
-import { EComRule } from '../types';
+import React, { useState, useRef } from 'react';
+import { EComRule, GlobalSettings } from '../types';
 
 interface RuleCardProps {
   rule: EComRule;
   isFavorite: boolean;
   onToggleFavorite: (rule: EComRule) => void;
-  onUpdateRule?: (rule: EComRule) => void;
+  onUpdateRule?: (rule: EComRule, applyToAll?: boolean) => void;
+  globalSettings?: GlobalSettings;
 }
 
-const RuleCard: React.FC<RuleCardProps> = ({ rule, isFavorite, onToggleFavorite, onUpdateRule }) => {
+const RuleCard: React.FC<RuleCardProps> = ({ rule, isFavorite, onToggleFavorite, onUpdateRule, globalSettings }) => {
   const [isFlipped, setIsFlipped] = useState(false);
-  const [showCopyFeedback, setShowCopyFeedback] = useState(false);
   const [isEditing, setIsEditing] = useState(false);
+  const [showSources, setShowSources] = useState(false);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
-  const colors = [
-    { name: 'Shopee', class: 'from-orange-500 to-red-600' },
-    { name: 'Lazada', class: 'from-blue-600 to-purple-600' },
-    { name: 'TikTok', class: 'from-black to-gray-800' },
-    { name: 'Tiki', class: 'from-sky-400 to-blue-500' },
-    { name: 'Emerald', class: 'from-emerald-500 to-teal-700' },
-    { name: 'Rose', class: 'from-rose-500 to-pink-600' },
-    { name: 'Indigo', class: 'from-indigo-600 to-blue-700' },
-  ];
-
-  const getPlatformColor = (platform: string) => {
-    if (rule.customColor) return rule.customColor;
-    const p = platform.toLowerCase();
-    if (p.includes('shopee')) return colors[0].class;
-    if (p.includes('lazada')) return colors[1].class;
-    if (p.includes('tiktok')) return colors[2].class;
-    if (p.includes('tiki')) return colors[3].class;
-    return 'from-slate-700 to-slate-900';
-  };
-
-  const handleTogglePin = (e: React.MouseEvent) => {
-    e.stopPropagation();
-    if (onUpdateRule) {
-      onUpdateRule({ ...rule, isPinned: !rule.isPinned });
+  const getStyle = () => {
+    const bg = rule.backgroundImage || (globalSettings?.useGlobalBackground ? globalSettings.globalBackgroundImage : null);
+    if (bg) {
+      return { 
+        backgroundImage: `linear-gradient(rgba(0,0,0,0.5), rgba(0,0,0,0.8)), url(${bg})`,
+        backgroundSize: 'cover',
+        backgroundPosition: 'center',
+        className: 'bg-slate-900' 
+      };
     }
-  };
 
-  const handleUpdatePriority = (priority: 'high' | 'medium' | 'low') => {
-    if (onUpdateRule) {
-      onUpdateRule({ ...rule, priority });
-    }
-  };
-
-  const handleShareClick = async (e: React.MouseEvent) => {
-    e.stopPropagation();
-    const shareData = {
-      title: `${rule.platform}: ${rule.title}`,
-      text: `Quy định TMĐT: ${rule.title}\n\nMẹo: ${rule.tips}`,
-      url: rule.sourceUrl || window.location.href,
+    const platformColors: Record<string, string> = {
+      'Shopee': 'bg-gradient-to-br from-orange-500 to-red-600',
+      'TikTok Shop': 'bg-gradient-to-br from-slate-800 to-black',
+      'Thuế & Pháp lý': 'bg-gradient-to-br from-emerald-600 to-teal-800'
     };
-    if (navigator.share) {
-      try { await navigator.share(shareData); } catch (err) {}
-    } else {
-      try {
-        await navigator.clipboard.writeText(`${shareData.title}\n${shareData.text}`);
-        setShowCopyFeedback(true);
-        setTimeout(() => setShowCopyFeedback(false), 2000);
-      } catch (err) {}
+    return { className: platformColors[rule.platform] || 'bg-indigo-600' };
+  };
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (!file || file.size > 1024 * 1024) {
+      alert("Chọn ảnh < 1MB");
+      return;
     }
+    const reader = new FileReader();
+    reader.onload = () => onUpdateRule?.({ ...rule, backgroundImage: reader.result as string });
+    reader.readAsDataURL(file);
+  };
+
+  const style = getStyle();
+  const formatTimeShort = (ts?: number) => {
+    if (!ts) return '';
+    return new Date(ts).toLocaleDateString('vi-VN', { day: '2-digit', month: '2-digit' }) + ' ' + new Date(ts).toLocaleTimeString('vi-VN', { hour: '2-digit', minute: '2-digit' });
   };
 
   return (
-    <div 
-      className="card-perspective h-[450px] md:h-[430px] w-full group cursor-pointer"
-      onClick={() => !isEditing && setIsFlipped(!isFlipped)}
-    >
-      <div className={`card-inner manual-flip transform-gpu ${isFlipped ? 'is-flipped' : ''}`}>
-        {/* Front Side */}
-        <div className={`card-front absolute w-full h-full rounded-3xl p-6 md:p-8 flex flex-col justify-between text-white shadow-xl bg-gradient-to-br ${getPlatformColor(rule.platform)}`}>
-          <div className="w-full flex justify-between items-start">
-            <div className="flex flex-col gap-2">
-              <span className="px-3 py-1 bg-white/20 rounded-full text-[10px] font-black uppercase tracking-widest backdrop-blur-md">
-                {rule.platform}
-              </span>
-              {rule.priority === 'high' && (
-                <span className="bg-red-500 text-white text-[9px] font-black px-2 py-0.5 rounded flex items-center gap-1 w-fit shadow-sm">
-                  <span className="w-1.5 h-1.5 bg-white rounded-full animate-pulse"></span> KHẨN CẤP
+    <div className="card-perspective h-[520px] w-full cursor-pointer group" onClick={() => !isEditing && setIsFlipped(!isFlipped)}>
+      <div className={`card-inner manual-flip transform-gpu h-full duration-700 ${isFlipped ? 'is-flipped' : ''}`}>
+        
+        {/* MẶT TRƯỚC */}
+        <div 
+          style={style.backgroundImage ? { backgroundImage: style.backgroundImage, backgroundSize: style.backgroundSize, backgroundPosition: style.backgroundPosition } : {}}
+          className={`card-front absolute inset-0 rounded-[40px] p-10 flex flex-col justify-between text-white shadow-2xl transition-all ${style.className} overflow-hidden`}
+        >
+          <div className="flex justify-between items-start z-10">
+            <div className="flex flex-col gap-1">
+              <div className="flex items-center gap-2">
+                <span className="px-4 py-1.5 bg-white/20 rounded-full text-[10px] font-black uppercase tracking-widest backdrop-blur-md border border-white/10">
+                  {rule.platform}
                 </span>
+                <div className="flex items-center gap-1 bg-green-500/80 px-2 py-1 rounded-full text-[8px] font-black uppercase tracking-tighter backdrop-blur-sm">
+                   <svg className="w-2.5 h-2.5" fill="currentColor" viewBox="0 0 20 20"><path fillRule="evenodd" d="M10 18a8 8 0 100-16 8 8 0 000 16zm3.707-9.293a1 1 0 00-1.414-1.414L9 10.586 7.707 9.293a1 1 0 00-1.414 1.414l2 2a1 1 0 001.414 0l4-4z" clipRule="evenodd" /></svg>
+                   Verified
+                </div>
+              </div>
+              {rule.fetchedAt && (
+                <span className="text-[8px] font-bold opacity-70 ml-1 uppercase tracking-tighter italic">Dữ liệu Global: {formatTimeShort(rule.fetchedAt)}</span>
               )}
             </div>
-            <div className="flex gap-2">
-              {isFavorite && (
-                <button 
-                  onClick={handleTogglePin}
-                  className={`p-2.5 rounded-full transition-all backdrop-blur-md ${rule.isPinned ? 'bg-yellow-400 text-slate-900 scale-110' : 'bg-white/10 text-white hover:bg-white/30'}`}
-                >
-                  <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill={rule.isPinned ? "currentColor" : "none"} viewBox="0 0 24 24" stroke="currentColor">
-                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M5 5a2 2 0 012-2h10a2 2 0 012 2v16l-7-3.5L5 21V5z" />
-                  </svg>
-                </button>
-              )}
-              <button onClick={(e) => { e.stopPropagation(); onToggleFavorite(rule); }} className={`p-2.5 rounded-full backdrop-blur-md transition-all ${isFavorite ? 'bg-white text-red-500' : 'bg-white/10'}`}>
-                <svg xmlns="http://www.w3.org/2000/svg" className="h-5 w-5" fill={isFavorite ? "currentColor" : "none"} viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0 00-6.364-6.364L12 7.636l-1.318-1.318a4.5 4.5 0 00-6.364 0z" /></svg>
-              </button>
-            </div>
-          </div>
-          
-          <div className="flex-1 flex flex-col justify-center text-center">
-            <h3 className="text-xl font-black mb-3 leading-tight">{rule.title}</h3>
-            <p className="text-sm opacity-90 italic">"{rule.summary}"</p>
+            <button 
+              onClick={(e) => { e.stopPropagation(); onToggleFavorite(rule); }} 
+              className={`p-3 rounded-[18px] transition-all ${isFavorite ? 'bg-white text-red-500 shadow-xl' : 'bg-white/10 hover:bg-white/30 backdrop-blur-md border border-white/10'}`}
+            >
+              <svg className="h-5 w-5" fill={isFavorite ? "currentColor" : "none"} stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M4.318 6.318a4.5 4.5 0 000 6.364L12 20.364l7.682-7.682a4.5 4.5 0 00-6.364-6.364L12 7.636l-1.318-1.318a4.5 4.5 0 00-6.364 0z" /></svg>
+            </button>
           </div>
 
-          <div className="w-full flex justify-between items-center pt-4 border-t border-white/10">
-            <button onClick={(e) => { e.stopPropagation(); setIsEditing(true); setIsFlipped(true); }} className="p-2 bg-white/10 rounded-lg hover:bg-white/20 transition-all">
-              <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15.232 5.232l3.536 3.536m-2.036-5.036a2.5 2.5 0 113.536 3.536L6.5 21.036H3v-3.572L16.732 3.732z" /></svg>
-            </button>
+          <div className="flex-1 flex flex-col justify-center text-center z-10">
+            <h3 className="text-2xl font-black mb-6 leading-tight drop-shadow-2xl uppercase tracking-tighter italic">{rule.title}</h3>
+            <p className="text-sm font-bold opacity-90 leading-relaxed drop-shadow-lg px-4 italic">"{rule.summary}"</p>
+          </div>
+
+          <div className="w-full pt-8 border-t border-white/20 flex justify-between items-center z-10">
+            <span className="text-[10px] font-black uppercase tracking-[0.2em] opacity-60">{rule.category}</span>
             <div className="flex gap-2">
-              <button onClick={handleShareClick} className="p-2 bg-white/10 rounded-lg hover:bg-white/20 transition-all relative">
-                <svg xmlns="http://www.w3.org/2000/svg" className="h-4 w-4" fill="none" viewBox="0 0 24 24" stroke="currentColor"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8.684 13.342C8.886 12.938 9 12.482 9 12c0-.482-.114-.938-.316-1.342m0 2.684a3 3 0 110-2.684m0 2.684l6.632 3.316m-6.632-6l6.632-3.316m0 0a3 3 0 105.367-2.684 3 3 0 00-5.367 2.684zm0 9.316a3 3 0 105.368 2.684 3 3 0 00-5.368-2.684z" /></svg>
-                {showCopyFeedback && <span className="absolute -top-8 left-1/2 -translate-x-1/2 bg-black text-[9px] px-2 py-1 rounded">Copied!</span>}
-              </button>
+               <div className="p-2.5 bg-white/10 rounded-xl backdrop-blur-sm border border-white/10 group-hover:bg-white/30 transition-all">
+                  <svg className="w-5 h-5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M12 8v4l3 3m6-3a9 9 0 11-18 0 9 9 0 0118 0z" /></svg>
+               </div>
             </div>
           </div>
         </div>
 
-        {/* Back Side */}
-        <div className="card-back absolute w-full h-full rounded-3xl bg-white p-6 md:p-8 flex flex-col shadow-2xl border border-slate-100 overflow-hidden text-slate-800">
-          <div className="flex justify-between items-center mb-4 pb-2 border-b border-slate-100">
-            <h4 className="font-black text-xs uppercase tracking-widest">{isEditing ? 'TÙY CHỈNH THẺ' : 'CHI TIẾT QUY ĐỊNH'}</h4>
-            <button onClick={(e) => { e.stopPropagation(); setIsEditing(!isEditing); }} className="text-indigo-600 font-bold text-[10px] hover:underline">
-              {isEditing ? 'XONG' : 'SỬA'}
-            </button>
+        {/* MẶT SAU */}
+        <div className="card-back absolute inset-0 rounded-[40px] bg-white p-10 flex flex-col shadow-2xl border border-slate-100 overflow-hidden">
+          <div className="flex justify-between items-center mb-6">
+            <div className="flex flex-col">
+              <h4 className="text-[11px] font-black text-slate-400 uppercase tracking-widest">{isEditing ? 'Tùy chỉnh cá nhân' : 'Phân tích thực thi 2026'}</h4>
+              <span className="text-[8px] font-bold text-slate-300 uppercase">Master Data Sync: {formatTimeShort(rule.fetchedAt)}</span>
+            </div>
+            <div className="flex gap-2">
+              {!isEditing && rule.sources && rule.sources.length > 0 && (
+                 <button 
+                  onClick={(e) => { e.stopPropagation(); setShowSources(!showSources); }} 
+                  className={`text-[9px] font-black px-4 py-2 rounded-2xl transition-all ${showSources ? 'bg-amber-500 text-white shadow-lg' : 'bg-amber-50 text-amber-600 hover:bg-amber-100'}`}
+                >
+                  {showSources ? 'ĐÓNG NGUỒN' : 'XEM NGUỒN'}
+                </button>
+              )}
+              <button 
+                onClick={(e) => { e.stopPropagation(); setIsEditing(!isEditing); setShowSources(false); }} 
+                className={`text-[9px] font-black px-4 py-2 rounded-2xl transition-all ${isEditing ? 'bg-indigo-600 text-white shadow-lg' : 'bg-slate-100 text-slate-600 hover:bg-slate-200'}`}
+              >
+                {isEditing ? 'LƯU LẠI' : 'SỬA THẺ'}
+              </button>
+            </div>
           </div>
 
-          <div className="flex-1 overflow-y-auto no-scrollbar">
-            {isEditing ? (
-              <div className="space-y-4">
+          <div className="flex-1 overflow-y-auto pr-2 custom-scrollbar space-y-6">
+            {showSources ? (
+              <div className="animate-in fade-in zoom-in-95 duration-300 space-y-4">
+                <p className="text-[10px] font-black text-slate-400 uppercase tracking-widest px-2">Các nguồn tin cậy đã đối soát:</p>
+                <div className="space-y-3">
+                  {rule.sources?.map((s, idx) => (
+                    <a 
+                      key={idx} 
+                      href={s.uri} 
+                      target="_blank" 
+                      rel="noopener noreferrer"
+                      onClick={e => e.stopPropagation()}
+                      className="block p-4 bg-slate-50 border border-slate-100 rounded-2xl hover:border-amber-400 hover:bg-white transition-all group"
+                    >
+                      <div className="flex justify-between items-start gap-4">
+                         <span className="text-[11px] font-bold text-slate-700 leading-tight group-hover:text-amber-600">{s.title}</span>
+                         <svg className="w-3 h-3 text-slate-300 shrink-0 group-hover:text-amber-500" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={3} d="M10 6H6a2 2 0 00-2 2v10a2 2 0 002 2h10a2 2 0 002-2v-4M14 4h6m0 0v6m0-6L10 14" /></svg>
+                      </div>
+                      <span className="text-[9px] font-medium text-slate-400 mt-2 block truncate">{s.uri}</span>
+                    </a>
+                  ))}
+                </div>
+              </div>
+            ) : isEditing ? (
+              <div className="space-y-8 animate-in fade-in duration-300">
                 <div>
-                  <p className="text-[10px] font-black text-slate-400 mb-2">ƯU TIÊN</p>
-                  <div className="flex gap-2">
-                    {['low', 'medium', 'high'].map(p => (
-                      <button key={p} onClick={(e) => { e.stopPropagation(); handleUpdatePriority(p as any); }} className={`px-3 py-1 rounded-lg text-[10px] font-bold border ${rule.priority === p ? 'bg-slate-900 text-white border-slate-900' : 'bg-white text-slate-400 border-slate-200'}`}>
-                        {p.toUpperCase()}
+                   <p className="text-[11px] font-black text-slate-400 mb-4 uppercase tracking-widest">Giao diện Shop của bạn</p>
+                   <div className="grid grid-cols-2 gap-4">
+                      <button onClick={(e) => { e.stopPropagation(); fileInputRef.current?.click(); }} className="h-32 border-2 border-dashed border-slate-200 rounded-[24px] flex flex-col items-center justify-center gap-3 hover:border-indigo-400 hover:bg-indigo-50 transition-all group relative overflow-hidden">
+                         {rule.backgroundImage ? (
+                           <>
+                             <img src={rule.backgroundImage} className="absolute inset-0 w-full h-full object-cover opacity-20" />
+                             <span className="text-[10px] font-black text-indigo-600 relative z-10">THAY ĐỔI ẢNH</span>
+                           </>
+                         ) : (
+                           <>
+                             <svg className="w-6 h-6 text-slate-300 group-hover:text-indigo-600 transition-colors" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16l4.586-4.586a2 2 0 012.828 0L16 16m-2-2l1.586-1.586a2 2 0 012.828 0L20 14m-6-6h.01M6 20h12a2 2 0 002-2V6a2 2 0 00-2-2H6a2 2 0 00-2 2v12a2 2 0 002 2z" /></svg>
+                             <span className="text-[10px] font-black text-slate-400">TẢI ẢNH NỀN</span>
+                           </>
+                         )}
+                         <input ref={fileInputRef} type="file" accept="image/*" onChange={handleFileChange} className="hidden" />
                       </button>
-                    ))}
-                  </div>
+                      <button 
+                        disabled={!rule.backgroundImage}
+                        onClick={(e) => { e.stopPropagation(); if (rule.backgroundImage && onUpdateRule) onUpdateRule(rule, true); }}
+                        className={`h-32 border-2 rounded-[24px] flex flex-col items-center justify-center p-5 text-center transition-all ${rule.backgroundImage ? 'border-indigo-600 bg-indigo-50 text-indigo-600 shadow-md scale-100 hover:scale-[1.02]' : 'border-slate-100 bg-slate-50 text-slate-300 cursor-not-allowed'}`}
+                      >
+                        <svg className="w-6 h-6 mb-3" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M8 7h12m0 0l-4-4m4 4l-4 4m0 6H4m0 0l4 4m-4-4l4-4" /></svg>
+                        <span className="text-[10px] font-black uppercase tracking-tight leading-tight">Đồng bộ toàn bộ Shop</span>
+                      </button>
+                   </div>
                 </div>
                 <div>
-                  <p className="text-[10px] font-black text-slate-400 mb-2">MÀU SẮC</p>
-                  <div className="flex flex-wrap gap-2">
-                    {colors.map((c, i) => (
-                      <button key={i} onClick={(e) => { e.stopPropagation(); onUpdateRule?.({ ...rule, customColor: c.class }); }} className={`w-6 h-6 rounded-full bg-gradient-to-br ${c.class} ${rule.customColor === c.class ? 'ring-2 ring-indigo-600' : ''}`} />
-                    ))}
-                  </div>
-                </div>
-                <div>
-                  <p className="text-[10px] font-black text-slate-400 mb-2">GHI CHÚ</p>
-                  <textarea onClick={e => e.stopPropagation()} value={rule.userNotes || ''} onChange={e => onUpdateRule?.({ ...rule, userNotes: e.target.value })} className="w-full h-20 p-3 bg-slate-50 rounded-xl text-xs border border-slate-200 outline-none focus:border-indigo-600 resize-none" placeholder="Lưu ý riêng của bạn..." />
+                   <p className="text-[11px] font-black text-slate-400 mb-4 uppercase tracking-widest">Ghi chú riêng (Lưu bí kíp)</p>
+                   <textarea 
+                     onClick={e => e.stopPropagation()}
+                     value={rule.userNotes || ''}
+                     onChange={e => onUpdateRule?.({ ...rule, userNotes: e.target.value })}
+                     className="w-full h-36 p-6 bg-slate-50 rounded-[32px] text-xs font-bold border-2 border-transparent focus:border-indigo-100 focus:bg-white transition-all outline-none resize-none shadow-inner"
+                     placeholder="Ví dụ: 'Phí Shopee 2026 tăng lên x%, cần cộng thêm vào giá bán...' "
+                   />
                 </div>
               </div>
             ) : (
-              <div className="space-y-4">
-                <ul className="space-y-3">
+              <div className="space-y-8 animate-in fade-in slide-in-from-top-4 duration-500">
+                <div className="space-y-4 px-2">
                   {rule.details.map((d, i) => (
-                    <li key={i} className="flex gap-3 text-sm font-medium text-slate-600">
-                      <span className="text-indigo-500 font-bold">•</span> {d}
-                    </li>
+                    <div key={i} className="flex gap-5 items-start group">
+                      <div className="mt-2 w-2 h-2 rounded-full bg-indigo-600 group-hover:scale-150 transition-all shadow-md shadow-indigo-200"></div>
+                      <p className="text-sm font-black text-slate-700 leading-relaxed tracking-tight">{d}</p>
+                    </div>
                   ))}
-                </ul>
-                <div className="p-4 bg-indigo-50 rounded-2xl border border-indigo-100">
-                  <p className="text-[9px] font-black text-indigo-600 uppercase mb-1">MẸO CHUYÊN GIA</p>
-                  <p className="text-xs font-semibold text-slate-700">{rule.tips}</p>
+                </div>
+                <div className="p-6 bg-slate-50 rounded-[32px] border border-slate-100 relative overflow-hidden">
+                  <div className="absolute top-0 right-0 p-4 opacity-5">
+                    <svg className="w-12 h-12" fill="currentColor" viewBox="0 0 24 24"><path d="M12 2L1 21h22L12 2zm0 3.45l8.15 14.1H3.85L12 5.45z"/></svg>
+                  </div>
+                  <p className="text-[10px] font-black text-indigo-600 uppercase mb-3 tracking-widest">Lời khuyên cố vấn 2026</p>
+                  <p className="text-xs font-bold text-slate-600 leading-relaxed italic">"{rule.tips}"</p>
                 </div>
                 {rule.userNotes && (
-                  <div className="p-3 bg-amber-50 rounded-xl border border-amber-100">
-                    <p className="text-[9px] font-black text-amber-600 uppercase mb-1">GHI CHÚ CỦA TÔI</p>
-                    <p className="text-xs font-medium italic text-amber-900">{rule.userNotes}</p>
+                   <div className="p-6 bg-indigo-600 text-white rounded-[32px] shadow-xl relative overflow-hidden group">
+                    <p className="text-[10px] font-black uppercase mb-3 tracking-widest opacity-70">Sổ tay cá nhân</p>
+                    <p className="text-sm font-bold leading-relaxed">{rule.userNotes}</p>
+                    <div className="absolute -right-4 -bottom-4 text-white opacity-10 transform rotate-12 group-hover:rotate-0 transition-transform duration-700">
+                       <svg className="w-24 h-24" fill="currentColor" viewBox="0 0 24 24"><path d="M11 5h2v14h-2zM4 11h16v2H4z" /></svg>
+                    </div>
                   </div>
                 )}
               </div>
             )}
           </div>
+
+          <button 
+            onClick={(e) => { e.stopPropagation(); setIsFlipped(false); setIsEditing(false); setShowSources(false); }}
+            className="mt-6 pt-4 border-t border-slate-100 text-[10px] font-black text-slate-400 hover:text-indigo-600 uppercase tracking-widest transition-all text-center block w-full"
+          >
+            Lật lại mặt trước
+          </button>
         </div>
       </div>
     </div>

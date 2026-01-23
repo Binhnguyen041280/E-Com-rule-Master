@@ -1,186 +1,167 @@
 
 import { GoogleGenAI, Type } from "@google/genai";
-import { RuleResponse } from "../types";
+import { RuleResponse, EComRule, GroundingSource, AgentLog, DynamicCollections } from "../types";
 
 const API_KEY = process.env.API_KEY || "";
-const USAGE_STATS_KEY = "ecom_api_usage_stats";
-const GLOBAL_CACHE_KEY = "ecom_rules_global_cache";
-const CONTEXT_CACHE_REF_KEY = "ecom_context_cache_id_v2";
+const GLOBAL_CACHE_KEY = "ecom_rules_v10";
 
-/**
- * BỘ TRI THỨC TMĐT CỐ ĐỊNH (KNOWLEDGE BASE)
- * Dữ liệu này sẽ được nạp vào Context Cache để tiết kiệm chi phí Input Tokens.
- */
-const STABLE_ECOM_KNOWLEDGE = `
-HỆ THỐNG QUY ĐỊNH THƯƠNG MẠI ĐIỆN TỬ VIỆT NAM (Cập nhật 2024-2025):
-
-1. NỀN TẢNG SHOPEE:
-- Phí thanh toán: 4% áp dụng cho tất cả đơn hàng.
-- Phí cố định: 5% cho Người bán không thuộc Shopee Mall, 2-5% cho Shopee Mall tùy ngành hàng.
-- Hệ thống Sao Quả Tạ: Điểm phạt tính theo tỷ lệ đơn hàng không thành công và tỷ lệ phản hồi chậm.
-- Shopee Video: Quy định về bản quyền âm nhạc và nội dung không được chứa điều hướng ngoài.
-
-2. NỀN TẢNG TIKTOK SHOP:
-- Phí sàn: 5% tổng giá trị đơn hàng.
-- Kiểm duyệt Livestream: Cấm các từ ngữ nhạy cảm về y tế, cam kết 100%, hoặc để lộ số điện thoại.
-- Điểm vi phạm: Tích lũy 48 điểm sẽ bị khóa shop vĩnh viễn.
-- Affiliate: Quy định về việc gắn link và hoa hồng tối thiểu cho creator.
-
-3. NỀN TẢNG LAZADA:
-- Phí cố định: Thay đổi theo ngành hàng (thường từ 2-4% cho Marketplace).
-- LazMall: Yêu cầu chứng từ nguồn gốc xuất xứ nghiêm ngặt, cam kết hàng chính hãng 100%.
-- Tỷ lệ giao hàng đúng hạn (SOT): Phải duy trì trên 90% để không bị giới hạn đơn hàng.
-
-4. QUY ĐỊNH CHUNG & THUẾ:
-- Thuế TMĐT: Sàn tự động khấu trừ thuế TNCN và GTGT đối với cá nhân kinh doanh (thường là 1.5%).
-- Đóng gói: Quy định về kích thước và cân nặng quy đổi (Dài x Rộng x Cao / 6000).
-- Hoàn hàng: Quy định về bằng chứng (Video unboxing) là bắt buộc để khiếu nại thành công.
-`;
-
-export const SecurityGuard = {
-  checkQuota: (): { allowed: boolean; remaining: number } => {
-    const today = new Date().toDateString();
-    const statsRaw = localStorage.getItem(USAGE_STATS_KEY);
-    let stats = statsRaw ? JSON.parse(statsRaw) : { date: today, count: 0 };
-    if (stats.date !== today) stats = { date: today, count: 0 };
-    const DAILY_LIMIT = 20;
-    return { allowed: stats.count < DAILY_LIMIT, remaining: Math.max(0, DAILY_LIMIT - stats.count) };
-  },
-  recordUsage: () => {
-    const today = new Date().toDateString();
-    const statsRaw = localStorage.getItem(USAGE_STATS_KEY);
-    let stats = statsRaw ? JSON.parse(statsRaw) : { date: today, count: 0 };
-    if (stats.date !== today) stats = { date: today, count: 0 };
-    stats.count += 1;
-    localStorage.setItem(USAGE_STATS_KEY, JSON.stringify(stats));
-  },
-  isValidQuery: (query: string): boolean => {
-    const q = query.toLowerCase();
-    const keywords = ['shopee', 'lazada', 'tiktok', 'tiki', 'phí', 'hoàn', 'thuế', 'vi phạm', 'vận chuyển', 'điểm phạt'];
-    return keywords.some(kw => q.includes(kw)) || q.includes('.vn') || q.includes('.com');
-  }
+const PLATFORM_OFFICIAL_DOMAINS: Record<string, string> = {
+  'Shopee': 'help.shopee.vn, shopee.vn/m/bieu-phi-nguoi-ban',
+  'TikTok Shop': 'seller-vn.tiktok.com, tiktoksellercenter.com',
+  'Thuế & Pháp lý': 'gdt.gov.vn, thuvienphapluat.vn'
 };
 
 export const StorageDB = {
-  getStats: () => {
-    const raw = localStorage.getItem(GLOBAL_CACHE_KEY) || "{}";
-    return { sizeKb: (new Blob([raw]).size / 1024).toFixed(2), count: Object.keys(JSON.parse(raw)).length };
+  getData: () => JSON.parse(localStorage.getItem(GLOBAL_CACHE_KEY) || "{}"),
+  saveData: (data: any) => localStorage.setItem(GLOBAL_CACHE_KEY, JSON.stringify(data)),
+  
+  getPlatformMaster: (platform: string) => {
+    const db = StorageDB.getData();
+    return db[`master:${platform}`] || null;
   },
-  getGlobal: (query: string): RuleResponse | null => {
-    try {
-      const db = JSON.parse(localStorage.getItem(GLOBAL_CACHE_KEY) || "{}");
-      return db[query.toLowerCase().trim()] || null;
-    } catch (e) { return null; }
+  
+  getLogs: (): AgentLog[] => {
+    const db = StorageDB.getData();
+    return db.logs || [];
   },
-  saveGlobal: (query: string, data: RuleResponse) => {
-    try {
-      const db = JSON.parse(localStorage.getItem(GLOBAL_CACHE_KEY) || "{}");
-      db[query.toLowerCase().trim()] = { ...data, timestamp: Date.now() };
-      localStorage.setItem(GLOBAL_CACHE_KEY, JSON.stringify(db));
-    } catch (e) {}
+
+  addLog: (log: Omit<AgentLog, 'id' | 'timestamp'>) => {
+    const db = StorageDB.getData();
+    const newLog: AgentLog = { ...log, id: Math.random().toString(36).substr(2, 9), timestamp: Date.now() };
+    db.logs = [newLog, ...(db.logs || [])].slice(0, 50);
+    StorageDB.saveData(db);
   }
 };
 
-/**
- * QUẢN LÝ CONTEXT CACHING
- */
-const getContextCache = async (ai: any) => {
-  const cachedName = localStorage.getItem(CONTEXT_CACHE_REF_KEY);
-  
-  if (cachedName) {
+const AGENT_INSTRUCTION = `
+Bạn là "Sentinel Agent TMĐT 2026". 
+Nhiệm vụ: 
+1. Tự động quét và phát hiện các thay đổi quy định mới nhất.
+2. Phân loại độ ưu tiên: 'high' cho các thay đổi về phí, thuế hoặc luật cấm; 'medium' cho vận hành; 'low' cho mẹo vặt.
+3. Nếu phát hiện một chủ đề mới chưa có trong danh mục (ví dụ: Quy định về AI Content), hãy đề xuất tên danh mục mới.
+4. Luôn trích dẫn nguồn từ các tên miền chính thống.
+`;
+
+export const EComAgent = {
+  // Quét toàn bộ dữ liệu của một sàn để cập nhật "Master Data" và "Global Library"
+  runDeepScan: async (platform: string): Promise<RuleResponse> => {
+    StorageDB.addLog({ action: `Bắt đầu quét Deep Scan cho ${platform}`, platform, type: 'info' });
+    
+    const ai = new GoogleGenAI({ apiKey: API_KEY });
+    const officialDomain = PLATFORM_OFFICIAL_DOMAINS[platform as keyof typeof PLATFORM_OFFICIAL_DOMAINS];
+    
+    const prompt = `[PROACTIVE AGENT SCAN 2026] 
+    Quét toàn bộ tin tức, thông báo và trung tâm trợ giúp tại ${officialDomain}.
+    Tìm ra 10 quy định/thông báo QUAN TRỌNG NHẤT đang có hiệu lực hoặc sắp áp dụng trong năm 2026.
+    Phân tích và trả về danh sách thẻ quy tắc.`;
+
     try {
-      // Kiểm tra xem cache còn hiệu lực không
-      const cache = await ai.caches.get({ name: cachedName });
-      return cache.name;
+      const response = await ai.models.generateContent({
+        model: "gemini-3-flash-preview",
+        contents: prompt,
+        config: {
+          systemInstruction: AGENT_INSTRUCTION,
+          tools: [{ googleSearch: {} }],
+          responseMimeType: "application/json",
+          responseSchema: {
+            type: Type.OBJECT,
+            properties: {
+              rules: {
+                type: Type.ARRAY,
+                items: {
+                  type: Type.OBJECT,
+                  properties: {
+                    id: { type: Type.STRING },
+                    platform: { type: Type.STRING },
+                    category: { type: Type.STRING },
+                    title: { type: Type.STRING },
+                    summary: { type: Type.STRING },
+                    details: { type: Type.ARRAY, items: { type: Type.STRING } },
+                    tips: { type: Type.STRING },
+                    priority: { type: Type.STRING, enum: ['high', 'medium', 'low'] }
+                  },
+                  required: ["id", "platform", "category", "title", "summary", "details", "tips", "priority"]
+                }
+              },
+              suggestedCategories: { type: Type.ARRAY, items: { type: Type.STRING } }
+            }
+          }
+        }
+      });
+
+      const data = JSON.parse(response.text || '{"rules":[], "suggestedCategories":[]}');
+      const timestamp = Date.now();
+      
+      const sources: GroundingSource[] = [];
+      const chunks = response.candidates?.[0]?.groundingMetadata?.groundingChunks;
+      if (chunks) {
+        chunks.forEach((c: any) => { if (c.web) sources.push({ title: c.web.title, uri: c.web.uri }); });
+      }
+
+      const rules = data.rules.map((r: any) => ({ ...r, fetchedAt: timestamp, sources, isNew: true }));
+      
+      StorageDB.addLog({ 
+        action: `Hoàn tất quét. Tìm thấy ${rules.length} quy tắc. Đề xuất ${data.suggestedCategories?.length || 0} mục mới.`, 
+        platform, 
+        type: 'update' 
+      });
+
+      return { rules, sources, timestamp, suggestedCategories: data.suggestedCategories };
     } catch (e) {
-      console.debug("Cache expired, creating new context...");
+      StorageDB.addLog({ action: `Lỗi khi quét: ${e}`, platform, type: 'warning' });
+      throw e;
     }
   }
-
-  try {
-    const newCache = await ai.caches.create({
-      model: "gemini-3-flash-preview",
-      config: {
-        systemInstruction: "Bạn là chuyên gia cố vấn pháp lý TMĐT. Bạn có bộ tri thức nền tảng được nạp sẵn. Hãy sử dụng nó để trả lời nhanh và chính xác.",
-        contents: [{ role: 'user', parts: [{ text: STABLE_ECOM_KNOWLEDGE }] }],
-        ttlSeconds: 86400 // 24 giờ
-      }
-    });
-    localStorage.setItem(CONTEXT_CACHE_REF_KEY, newCache.name);
-    return newCache.name;
-  } catch (e) {
-    console.error("Context Caching Error:", e);
-    return null;
-  }
 };
 
-export const generateEComRules = async (query: string): Promise<RuleResponse> => {
-  // 1. Kiểm tra Local Storage Cache trước
-  const cachedData = StorageDB.getGlobal(query);
-  if (cachedData) return cachedData;
-
-  // 2. Kiểm tra bảo mật & định mức
-  if (!SecurityGuard.isValidQuery(query)) throw new Error("REJECTED");
-  const quota = SecurityGuard.checkQuota();
-  if (!quota.allowed) throw new Error("QUOTA_EXCEEDED");
-
+export const generateEComRules = async (query: string, platform: string): Promise<RuleResponse> => {
+  // Giữ nguyên logic tìm kiếm theo yêu cầu người dùng, nhưng sử dụng Agent Instruction
   const ai = new GoogleGenAI({ apiKey: API_KEY });
-  
-  // 3. Lấy hoặc Tạo Context Cache
-  const cacheName = await getContextCache(ai);
+  const prompt = `Phân tích chuyên sâu về chủ đề: "${query}" tại ${platform} năm 2026.`;
 
-  try {
-    const response = await ai.models.generateContent({
-      model: "gemini-3-flash-preview",
-      contents: `Tra cứu và phân tích chi tiết quy định cho: "${query}"`,
-      config: {
-        cachedContent: cacheName || undefined,
-        tools: [{ googleSearch: {} }],
-        responseMimeType: "application/json",
-        responseSchema: {
-          type: Type.OBJECT,
-          properties: {
-            rules: {
-              type: Type.ARRAY,
-              items: {
-                type: Type.OBJECT,
-                properties: {
-                  id: { type: Type.STRING },
-                  platform: { type: Type.STRING },
-                  category: { type: Type.STRING },
-                  title: { type: Type.STRING },
-                  summary: { type: Type.STRING },
-                  details: { type: Type.ARRAY, items: { type: Type.STRING } },
-                  tips: { type: Type.STRING },
-                  sourceUrl: { type: Type.STRING }
-                },
-                required: ["id", "platform", "category", "title", "summary", "details", "tips", "sourceUrl"]
-              }
+  const response = await ai.models.generateContent({
+    model: "gemini-3-flash-preview",
+    contents: prompt,
+    config: {
+      systemInstruction: AGENT_INSTRUCTION,
+      tools: [{ googleSearch: {} }],
+      responseMimeType: "application/json",
+      responseSchema: {
+        type: Type.OBJECT,
+        properties: {
+          rules: {
+            type: Type.ARRAY,
+            items: {
+              type: Type.OBJECT,
+              properties: {
+                id: { type: Type.STRING },
+                platform: { type: Type.STRING },
+                category: { type: Type.STRING },
+                title: { type: Type.STRING },
+                summary: { type: Type.STRING },
+                details: { type: Type.ARRAY, items: { type: Type.STRING } },
+                tips: { type: Type.STRING },
+                priority: { type: Type.STRING, enum: ['high', 'medium', 'low'] }
+              },
+              required: ["id", "platform", "category", "title", "summary", "details", "tips", "priority"]
             }
           }
         }
       }
-    });
-
-    const parsedData = JSON.parse(response.text || '{"rules":[]}');
-    
-    // Ghi nhận sử dụng
-    SecurityGuard.recordUsage();
-
-    const sources: any[] = [];
-    const groundingChunks = response.candidates?.[0]?.groundingMetadata?.groundingChunks;
-    if (groundingChunks) {
-      groundingChunks.forEach((chunk: any) => {
-        if (chunk.web) sources.push({ title: chunk.web.title, uri: chunk.web.uri });
-      });
     }
+  });
 
-    const finalResult = { rules: parsedData.rules, sources };
-    StorageDB.saveGlobal(query, finalResult);
-
-    return finalResult;
-  } catch (error: any) {
-    console.error("AI Generation Error:", error);
-    throw error;
+  const data = JSON.parse(response.text || '{"rules":[]}');
+  const timestamp = Date.now();
+  const sources: GroundingSource[] = [];
+  const chunks = response.candidates?.[0]?.groundingMetadata?.groundingChunks;
+  if (chunks) {
+    chunks.forEach((c: any) => { if (c.web) sources.push({ title: c.web.title, uri: c.web.uri }); });
   }
+
+  return { 
+    rules: data.rules.map((r: any) => ({ ...r, fetchedAt: timestamp, sources, platform })), 
+    sources, 
+    timestamp 
+  };
 };
